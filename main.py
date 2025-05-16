@@ -26,7 +26,8 @@ html(
     """
     <script>
       const data = localStorage.getItem('tasksData');
-      if (data && !localStorage.getItem('loaded')) {
+      const loaded = localStorage.getItem('loaded');
+      if (data && !loaded) {
         localStorage.setItem('loaded', '1');
         const url = window.location.pathname + '?initialData=' + encodeURIComponent(data);
         window.location.replace(url);
@@ -46,6 +47,17 @@ if 'initialData' in params:
     # 쿼리 파라미터 제거
     st.experimental_set_query_params()
 # -------------------------
+params = st.query_params
+if 'initialData' in params:
+    try:
+        loaded_data = json.loads(params['initialData'][0])
+        st.session_state.data = loaded_data
+    except Exception:
+        pass
+    # 쿼리 파라미터 제거
+    st.experimental_set_query_params()
+# -------------------------
+)
 
 # -------------------------
 # 스타일 및 반응형: 모바일 + 폰트 크기
