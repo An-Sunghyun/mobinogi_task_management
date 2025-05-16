@@ -29,7 +29,7 @@ if "initialData" in params and params.get("loaded", ["0"])[0] == "0":
     except Exception:
         pass
     # URL 파라미터 제거 후 재실행
-    st.set_query_params(loaded="1")
+    st.experimental_set_query_params(loaded="1")
     st.experimental_rerun()
 
 # JS를 이용해 로컬스토리지에서 data 읽어 쿼리파라미터로 전달
