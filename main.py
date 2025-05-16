@@ -19,26 +19,15 @@ st.set_page_config(
 )
 
 # -------------------------
-# 로컬 스토리지 연동: 초기 로드
+# 로컬 스토리지 연동: JS -> 파라미터 및 초기 로드
 # -------------------------
-params = st.query_params
-if "initialData" in params and params.get("loaded", ["0"])[0] == "0":
-    try:
-        loaded_data = json.loads(params["initialData"][0])
-        st.session_state.data = loaded_data
-    except Exception:
-        pass
-    # URL 파라미터 제거 후 재실행
-    st.experimental_set_query_params(loaded="1")
-    st.experimental_rerun()
-
-# JS를 이용해 로컬스토리지에서 data 읽어 쿼리파라미터로 전달
+# JS: 브라우저 localStorage에서 tasksData가 있고, 'loaded' 플래그가 없으면 쿼리파라미터로 전달 및 플래그 설정
 html(
     """
     <script>
       const data = localStorage.getItem('tasksData');
-      const params = new URLSearchParams(window.location.search);
-      if (data && !params.has('initialData')) {
+      if (data && !localStorage.getItem('loaded')) {
+        localStorage.setItem('loaded', '1');
         const url = window.location.pathname + '?initialData=' + encodeURIComponent(data);
         window.location.replace(url);
       }
@@ -46,6 +35,17 @@ html(
     """,
     height=0,
 )
+# Python: URL 쿼리파라미터에서 초기 데이터 로드
+params = st.query_params
+if 'initialData' in params:
+    try:
+        loaded_data = json.loads(params['initialData'][0])
+        st.session_state.data = loaded_data
+    except Exception:
+        pass
+    # 쿼리 파라미터 제거
+    st.experimental_set_query_params()
+# -------------------------
 
 # -------------------------
 # 스타일 및 반응형: 모바일 + 폰트 크기
