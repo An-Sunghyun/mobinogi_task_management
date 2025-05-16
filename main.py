@@ -57,7 +57,6 @@ if 'initialData' in params:
     # 쿼리 파라미터 제거
     st.experimental_set_query_params()
 # -------------------------
-)
 
 # -------------------------
 # 스타일 및 반응형: 모바일 + 폰트 크기
