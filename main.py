@@ -137,19 +137,10 @@ def load_data(uploaded_file=None):
 
     # Save data to server file after initial load if it came from file, upload, or default
     # This ensures the file exists and contains the current state (including potential auto-resets)
-    # Only save if data was successfully loaded or initialized as default
-    # Also saves if auto-reset happened. Avoid double-saving on initial load.
-    # The auto-reset logic already saves if a reset occurs.
-    # Let's ensure a save happens even if no auto-reset occurs but data was just loaded/defaulted.
-    if loaded_successfully and 'data' in st.session_state: # Ensure session state has data
-         # Check if auto-reset caused a rerun already. If not, save now.
-         # This is tricky with Streamlit's execution model.
-         # Simplest is to save after check_and_perform_auto_reset if data was just loaded/initialized.
-         # However, auto-reset already saves *and* reruns.
-         # Let's trust the auto-reset logic to save and just save on initial load if file didn't exist.
-         if not os.path.exists(DATA_FILE):
-             save_data_to_server_file(st.session_state.data)
-
+    # Only save if data was successfully loaded or initialized as default AND the file didn't exist before.
+    # If auto-reset happened, it already saved.
+    if ('data' in st.session_state and st.session_state.data is not None) and not os.path.exists(DATA_FILE):
+         save_data_to_server_file(st.session_state.data)
 
 
 def _set_time_to_datetime(dt, hour=6, minute=0):
@@ -298,14 +289,15 @@ def _render_character_management(data):
     else:
          valid_char_names_for_select = valid_char_names[:] # 목록 복사
 
-    # 현재 선택된 캐릭터 이름 가져오기 (세션 상태 또는 유효한 첫 캐릭터 이름)
-    # valid_char_names가 비어있지 않으면 첫 번째 이름으로 기본값 설정
-    if 'selected_char' not in st.session_state or st.session_state.selected_char not in valid_char_names:
+    # Ensure a valid character is selected in session state if possible
+    if 'selected_char' not in st.session_state or (st.session_state.selected_char not in valid_char_names and valid_char_names):
         st.session_state.selected_char = valid_char_names[0] if valid_char_names else None
+
 
     # --- 캐릭터 선택 selectbox 및 관리 버튼 배치 ---
     # Adjust columns to fit selectbox and 3 buttons
-    col_select, col_btn1, col_btn2, col_btn3 = st.columns([4, 1, 1, 1]) # Adjusted column ratios
+    # Increased selectbox column slightly
+    col_select, col_btn1, col_btn2, col_btn3 = st.columns([5, 1, 1, 1])
 
     with col_select:
         # 캐릭터 선택 selectbox
@@ -313,17 +305,17 @@ def _render_character_management(data):
             "캐릭터 선택:", # Keep label for selectbox clarity
             options=valid_char_names_for_select,
             key="selected_char_selectbox",
-            # 현재 선택된 이름이 목록에 있으면 해당 인덱스 사용, 없으면 0 사용
+            # Use st.session_state value for index if it's valid in the list, otherwise use 0
             index=valid_char_names_for_select.index(st.session_state.selected_char) if st.session_state.selected_char in valid_char_names_for_select else 0,
-            disabled=not characters # 캐릭터 없으면 비활성화
+            disabled=not characters # Disable if no characters
         )
-        # selectbox 선택 결과를 session_state에 저장 (실제 캐릭터 이름인 경우만)
-        # This ensures st.session_state.selected_char always reflects the selectbox value, unless '캐릭터 없음' is selected and there are actual characters (a safeguard).
+        # Update session state based on selectbox value (only if it's not the default '캐릭터 없음' when characters exist)
         if selected_char_name != "캐릭터 없음":
              st.session_state.selected_char = selected_char_name
         elif characters and st.session_state.selected_char not in valid_char_names: # Safeguard: if selectbox shows '캐릭터 없음' but characters exist and selected_char is invalid
              st.session_state.selected_char = characters[0].get("name") # Force to first character
              st.rerun() # Force rerun to correct selectbox
+
 
     with col_btn1:
         st.write(" ") # Add spacing to align buttons vertically
@@ -350,19 +342,22 @@ def _render_character_management(data):
             if selected_char_name_to_delete and selected_char_name_to_delete in valid_char_names:
                 # Filter out the character to delete
                 original_char_count = len(characters)
-                data["characters"][:] = [c for c in characters if isinstance(c, dict) and c.get("name") != selected_char_name_to_delete] # Modify list in place via slice
+                # Use list comprehension to create the new list and reassign
+                data["characters"] = [c for c in characters if isinstance(c, dict) and c.get("name") != selected_char_name_to_delete]
 
                 if len(data["characters"]) < original_char_count: # Check if deletion happened
                      save_data_to_server_file(data) # Save after modifying data
                      st.success(f"'{selected_char_name_to_delete}' 캐릭터가 삭제되었습니다.")
                      # Update selected character state after deletion
                      if data["characters"]:
+                         # Set selected character to the first one in the new list
                          st.session_state.selected_char = data["characters"][0].get("name")
                      else:
-                         st.session_state.selected_char = None # No characters left
+                         # No characters left
+                         st.session_state.selected_char = None
                      st.rerun() # UI update
                 else:
-                     st.warning("캐릭터 삭제에 실패했습니다. (캐릭터를 찾을 수 없습니다)")
+                     st.warning("캐릭터 삭제에 실패했습니다. (캐릭터를 찾을 수 없습니다)") # Should not happen if valid_char_names check passes
             elif not characters:
                  st.info("삭제할 캐릭터가 없습니다.")
             else:
@@ -472,13 +467,10 @@ def _render_tasks(data):
 
     # Only render task sections if characters exist AND a valid character is selected
     if not characters or not selected_char_data:
-         # No characters or no valid character selected, display instructions.
-         # Character management section already handles messages.
-         # Add the separator after the character management section, before where tasks *would* be.
+         # No characters or no valid character selected.
          # The separator after selectbox/buttons is rendered in the main app logic.
-         # If this function runs because there are no characters, we don't need task headers/separators.
-         pass # Do nothing, the character management section handled the "no characters" case.
-         # The separator *after* character management section is in main app logic.
+         # No task sections to render here.
+         pass
     else:
         # A valid character is selected, render tasks for this character.
 
@@ -615,7 +607,7 @@ def _render_tasks(data):
 
 def _render_data_management(data):
     """데이터 관리 섹션 렌더링"""
-    st.header("데이터 관리")
+    st.header("데이터 관리") # This header remains as it's the section title
 
     show_data_management = st.session_state.get("show_data_management", False)
 
@@ -673,7 +665,7 @@ st.markdown('''
 /* Global Font and Spacing Adjustments */
 /* Base font size for the document */
 html {
-    font-size: 14px !important;
+    font-size: 14px !important; /* You can try adjusting this base size */
 }
 /* Text size for most elements relative to html font size */
 body, [class*="st-emotion"], [class*="stText"], label {
@@ -684,87 +676,81 @@ body, [class*="st-emotion"], [class*="stText"], label {
 /* Title and Header Spacing */
 h1 { font-size: 1.8em !important; margin-top: 0.5em !important; margin-bottom: 0.5em !important; }
 /* DAILY, WEEKLY 헤더 크기 확대 및 여백 조정 */
-h2 { font-size: 1.6em !important; margin-top: 1em !important; margin-bottom: 0.4em !important; padding-bottom: 0 !important; } /* Ensure h2 has less bottom padding */
+h2 { font-size: 1.6em !important; margin-top: 1em !important; margin-bottom: 0.4em !important; padding-bottom: 0 !important; }
 h3 { font-size: 1.1em !important; margin-top: 0.8em !important; margin-bottom: 0.3em !important; }
-h4 { font-size: 1em !important; margin-top: 0.6em !important; margin-bottom: 0.2em !important; } /* Used for form titles */
+h4 { font-size: 1em !important; margin-top: 0.6em !important; margin-bottom: 0.2em !important; }
 
 
 /* Button Sizing and Padding */
 div[data-testid="stButton"] button {
-    font-size: 0.9em !important; /* Slightly smaller than base text */
-    padding: 0.3em 0.6em !important; /* Reduced padding */
-    margin: 0.2em 0 !important; /* Reduced vertical margin */
+    font-size: 0.9em !important;
+    padding: 0.3em 0.6em !important;
+    margin: 0.2em 0 !important; /* <--- Error reported here */
 }
 
 /* Checkbox Label Size and Spacing */
 div[data-testid="stCheckbox"] label {
-    font-size: 1em !important; /* Base font size */
-    margin-bottom: 0.3em !important; /* Reduced bottom margin */
-    padding-top: 0 !important; /* Remove top padding */
-    padding-bottom: 0 !important; /* Remove bottom padding */
+    font-size: 1em !important;
+    margin-bottom: 0.3em !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
 }
 
 /* Input Label Size and Spacing */
 div[data-testid="stTextInput"] label,
 div[data-testid="stSelectbox"] label,
 div[data-testid="stFileUploader"] label {
-    font-size: 1em !important; /* Base font size */
-    margin-bottom: 0.1em !important; /* Reduced bottom margin */
+    font-size: 1em !important;
+    margin-bottom: 0.1em !important;
     padding-top: 0 !important;
     padding-bottom: 0 !important;
 }
 
 /* Input Field Text Size and Padding */
 div[data-testid="stTextInput"] input {
-     font-size: 1em !important; /* Base font size */
-     padding: 0.3em 0.6em !important; /* Reduced padding */
+     font-size: 1em !important;
+     padding: 0.3em 0.6em !important;
 }
 
 /* Selectbox Selected Value Text Size */
 div[data-testid="stSelectbox"] div[data-testid="stText"] {
-     font-size: 1em !important; /* Base font size */
+     font-size: 1em !important;
 }
-/* Selectbox dropdown list text size (might not apply everywhere) */
-/* .stSelectbox > div > div > div > div { font-size: 1em !important; } */
-
 
 /* Markdown Text Spacing (e.g., task names) */
-/* Targets markdown output, often wrapped in p tags inside markdown container */
 div[data-testid="stMarkdownContainer"] {
-     margin-top: 0.4em !important; /* Reduced top margin */
-     margin-bottom: 0.2em !important; /* Reduced bottom margin */
+     margin-top: 0.4em !important;
+     margin-bottom: 0.2em !important;
      padding-top: 0 !important;
      padding-bottom: 0 !important;
 }
 div[data-testid="stMarkdownContainer"] p {
-    margin: 0 !important; /* Ensure p tag default margins are removed */
+    margin: 0 !important;
     padding: 0 !important;
 }
 
 /* Horizontal Rule (Separator) Spacing */
 hr {
-    margin-top: 0.8em !important; /* Reduced top margin */
-    margin-bottom: 0.8em !important; /* Reduced bottom margin */
+    margin-top: 0.8em !important;
+    margin-bottom: 0.8em !important;
 }
 
-/* Form Container Padding/Margin */
+/* Container (with border=True) Padding/Margin */
 /* This targets the border=True containers used for add/modify input forms */
 div[data-testid="stVerticalBlock"] div[data-testid="stVerticalBlock"] {
-    margin-top: 0.8em !important; /* Add margin above the form container */
-    margin-bottom: 1em !important; /* Reduced margin below the form container */
-    padding: 0.8em !important; /* Padding inside the container */
+    margin-top: 0.8em !important;
+    margin-bottom: 1em !important;
+    padding: 0.8em !important;
 }
 
 /* Form itself padding */
 div[data-testid="stForm"] {
-    padding: 0 !important; /* Remove default form padding as container has padding */
+    padding: 0 !important;
 }
 
-
 /* Column Gap Adjustment */
-/* Reduces horizontal space between columns */
 div[data-testid="stHorizontalBlock"] {
-    gap: 0.8rem !important; /* Reduced gap */
+    gap: 0.8rem !important;
 }
 
 /* Alert Message Boxes Spacing */
@@ -774,7 +760,6 @@ div[data-testid="stAlert"] {
     padding: 0.8em !important;
     font-size: 0.9em !important;
 }
-
 
 </style>
 ''', unsafe_allow_html=True)
