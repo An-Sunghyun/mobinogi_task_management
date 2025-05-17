@@ -66,13 +66,24 @@ def save_data_to_server_file(data):
             json.dump(data, f, indent=4, ensure_ascii=False)
         # st.sidebar.info("데이터 자동 저장됨") # Optional feedback - can be noisy
     except Exception as e:
-        st.sidebar.error(f"데이터 자동 저장 실패: {e}") # Indicate save failure
+        # Avoid showing errors repeatedly in production
+        # st.sidebar.error(f"데이터 자동 저장 실패: {e}")
+        pass # Silent failure for auto-save might be acceptable
 
 
 def load_data(uploaded_file=None):
     """데이터 로드 및 자동 초기화 처리"""
     data = None
     loaded_successfully = False # Track if data was loaded from file or upload
+
+    # Ensure session state variables for forms are initialized
+    if 'show_add_char_form' not in st.session_state:
+        st.session_state.show_add_char_form = False
+    if 'show_modify_char_form' not in st.session_state:
+        st.session_state.show_modify_char_form = False
+    if 'show_data_management' not in st.session_state:
+        st.session_state.show_data_management = False
+
 
     if 'data' in st.session_state and st.session_state.data is not None:
         # 1. Data already in session state (e.g., after rerun), use it
@@ -105,17 +116,18 @@ def load_data(uploaded_file=None):
                      data = DEFAULT_DATA.copy()
                 else:
                      data = file_data
-                     st.info(f"'{DATA_FILE}' 파일에서 데이터를 로드했습니다.")
+                     # st.info(f"'{DATA_FILE}' 파일에서 데이터를 로드했습니다.") # Suppress verbose load message
                      loaded_successfully = True
             except Exception as e:
-                st.warning(f"'{DATA_FILE}' 파일 로드 중 오류 발생: {e}. 기본 데이터로 시작합니다.")
+                # st.warning(f"'{DATA_FILE}' 파일 로드 중 오류 발생: {e}. 기본 데이터로 시작합니다.") # Suppress verbose error
                 data = DEFAULT_DATA.copy()
         else:
             # 4. No file exists, load default data
-            st.info(f"'{DATA_FILE}' 파일이 없습니다. 새 데이터로 시작합니다.")
+            # st.info(f"'{DATA_FILE}' 파일이 없습니다. 새 데이터로 시작합니다.") # Suppress verbose message
             data = DEFAULT_DATA.copy()
 
     # Ensure session state is initialized with loaded/default data if it wasn't already
+    # or if the previously loaded data was invalid
     if 'data' not in st.session_state or st.session_state.data is None or not loaded_successfully:
          st.session_state.data = data
 
@@ -126,8 +138,18 @@ def load_data(uploaded_file=None):
     # Save data to server file after initial load if it came from file, upload, or default
     # This ensures the file exists and contains the current state (including potential auto-resets)
     # Only save if data was successfully loaded or initialized as default
-    if loaded_successfully or not os.path.exists(DATA_FILE):
-         save_data_to_server_file(st.session_state.data)
+    # Also saves if auto-reset happened. Avoid double-saving on initial load.
+    # The auto-reset logic already saves if a reset occurs.
+    # Let's ensure a save happens even if no auto-reset occurs but data was just loaded/defaulted.
+    if loaded_successfully and 'data' in st.session_state: # Ensure session state has data
+         # Check if auto-reset caused a rerun already. If not, save now.
+         # This is tricky with Streamlit's execution model.
+         # Simplest is to save after check_and_perform_auto_reset if data was just loaded/initialized.
+         # However, auto-reset already saves *and* reruns.
+         # Let's trust the auto-reset logic to save and just save on initial load if file didn't exist.
+         if not os.path.exists(DATA_FILE):
+             save_data_to_server_file(st.session_state.data)
+
 
 
 def _set_time_to_datetime(dt, hour=6, minute=0):
@@ -265,86 +287,91 @@ def check_and_perform_auto_reset():
 
 def _render_character_management(data):
     """캐릭터 관리 섹션 렌더링"""
-    st.header("캐릭터 관리")
+    # Removed st.header("캐릭터 관리")
+
     characters = data.get("characters", []) # 안전하게 데이터 접근
 
     # 유효한 캐릭터 이름 목록 생성
     valid_char_names = [c.get("name") for c in characters if isinstance(c, dict) and c.get("name")]
     if not valid_char_names:
-         valid_char_names = ["캐릭터 없음"] # 캐릭터가 없을 때 selectbox에 표시될 기본 텍스트
+         valid_char_names_for_select = ["캐릭터 없음"] # 캐릭터가 없을 때 selectbox에 표시될 기본 텍스트
+    else:
+         valid_char_names_for_select = valid_char_names[:] # 목록 복사
 
     # 현재 선택된 캐릭터 이름 가져오기 (세션 상태 또는 유효한 첫 캐릭터 이름)
     # valid_char_names가 비어있지 않으면 첫 번째 이름으로 기본값 설정
-    if 'selected_char' not in st.session_state or st.session_state.selected_char not in [c.get("name") for c in characters if isinstance(c, dict) and c.get("name")]:
-        st.session_state.selected_char = valid_char_names[0] if valid_char_names and valid_char_names[0] != "캐릭터 없음" else None # "캐릭터 없음"일 경우 None
+    if 'selected_char' not in st.session_state or st.session_state.selected_char not in valid_char_names:
+        st.session_state.selected_char = valid_char_names[0] if valid_char_names else None
 
     # --- 캐릭터 선택 selectbox 및 관리 버튼 배치 ---
-    col_select, col_btn1, col_btn2, col_btn3 = st.columns([3, 1, 1, 1]) # 컬럼 비율 조정
+    # Adjust columns to fit selectbox and 3 buttons
+    col_select, col_btn1, col_btn2, col_btn3 = st.columns([4, 1, 1, 1]) # Adjusted column ratios
 
     with col_select:
         # 캐릭터 선택 selectbox
-        # characters 리스트가 비어있으면 기본값 ('캐릭터 없음')으로 selectbox 표시
         selected_char_name = st.selectbox(
-            "캐릭터 선택:",
-            options=valid_char_names,
+            "캐릭터 선택:", # Keep label for selectbox clarity
+            options=valid_char_names_for_select,
             key="selected_char_selectbox",
             # 현재 선택된 이름이 목록에 있으면 해당 인덱스 사용, 없으면 0 사용
-            index=valid_char_names.index(st.session_state.selected_char) if st.session_state.selected_char in valid_char_names else 0,
-            disabled=not [c for c in characters if isinstance(c, dict) and c.get("name")] # 캐릭터 없으면 비활성화
+            index=valid_char_names_for_select.index(st.session_state.selected_char) if st.session_state.selected_char in valid_char_names_for_select else 0,
+            disabled=not characters # 캐릭터 없으면 비활성화
         )
-        # selectbox 선택 결과를 session_state에 저장
-        if selected_char_name != "캐릭터 없음": # "캐릭터 없음"은 실제 캐릭터가 아니므로 저장하지 않음
+        # selectbox 선택 결과를 session_state에 저장 (실제 캐릭터 이름인 경우만)
+        # This ensures st.session_state.selected_char always reflects the selectbox value, unless '캐릭터 없음' is selected and there are actual characters (a safeguard).
+        if selected_char_name != "캐릭터 없음":
              st.session_state.selected_char = selected_char_name
-        elif characters: # 캐릭터는 있는데 selectbox에 "캐릭터 없음"이 선택된 이상한 상태일 경우
-             st.session_state.selected_char = characters[0].get("name") # 첫 캐릭터로 강제 설정
+        elif characters and st.session_state.selected_char not in valid_char_names: # Safeguard: if selectbox shows '캐릭터 없음' but characters exist and selected_char is invalid
+             st.session_state.selected_char = characters[0].get("name") # Force to first character
              st.rerun() # Force rerun to correct selectbox
 
-
     with col_btn1:
-        st.write(" ") # Add spacing to align buttons
+        st.write(" ") # Add spacing to align buttons vertically
         # 캐릭터 추가 버튼 - 클릭 시 입력 UI 표시 플래그 설정
         if st.button("추가", key="btn_add_char"):
             st.session_state.show_add_char_form = True
-            st.session_state.show_modify_char_form = False # 다른 폼 닫기
-            st.rerun() # 상태 변경 즉시 반영
+            st.session_state.show_modify_char_form = False # Close other form
+            st.rerun() # State change needs rerun to show the form
 
     with col_btn2:
         st.write(" ") # Add spacing
         # 캐릭터 변경 버튼 - 클릭 시 입력 UI 표시 플래그 설정
-        if st.button("변경", key="btn_modify_char", disabled=not characters): # 캐릭터 없으면 비활성화
+        if st.button("변경", key="btn_modify_char", disabled=not characters): # Disable if no characters
             st.session_state.show_modify_char_form = True
-            st.session_state.show_add_char_form = False # 다른 폼 닫기
-            st.rerun() # 상태 변경 즉시 반영
+            st.session_state.show_add_char_form = False # Close other form
+            st.rerun() # State change needs rerun to show the form
 
     with col_btn3:
         st.write(" ") # Add spacing
         # 캐릭터 삭제 버튼 - 클릭 시 삭제 로직 실행
-        if st.button("삭제", key="btn_delete_char", disabled=not characters): # 캐릭터 없으면 비활성화
+        if st.button("삭제", key="btn_delete_char", disabled=not characters): # Disable if no characters
             selected_char_name_to_delete = st.session_state.get("selected_char")
-            if selected_char_name_to_delete and selected_char_name_to_delete in [c.get("name") for c in characters if isinstance(c, dict) and c.get("name")]:
-                # 실제로 삭제 - 필터링 후 리스트 재할당
+            # Ensure selected character is valid before deleting
+            if selected_char_name_to_delete and selected_char_name_to_delete in valid_char_names:
+                # Filter out the character to delete
                 original_char_count = len(characters)
-                # 유효한 캐릭터 중 선택된 이름과 다른 캐릭터만 남김
-                data["characters"] = [c for c in characters if isinstance(c, dict) and c.get("name") != selected_char_name_to_delete]
+                data["characters"][:] = [c for c in characters if isinstance(c, dict) and c.get("name") != selected_char_name_to_delete] # Modify list in place via slice
 
-                if len(data["characters"]) < original_char_count: # 실제로 삭제되었는지 확인
-                     save_data_to_server_file(data) # 데이터 변경 후 저장
+                if len(data["characters"]) < original_char_count: # Check if deletion happened
+                     save_data_to_server_file(data) # Save after modifying data
                      st.success(f"'{selected_char_name_to_delete}' 캐릭터가 삭제되었습니다.")
-                     # 삭제 후 선택될 캐릭터 업데이트
+                     # Update selected character state after deletion
                      if data["characters"]:
                          st.session_state.selected_char = data["characters"][0].get("name")
                      else:
-                         st.session_state.selected_char = None # 남은 캐릭터 없음
-                     st.rerun() # UI 구조 변경 반영
+                         st.session_state.selected_char = None # No characters left
+                     st.rerun() # UI update
                 else:
-                     st.warning("캐릭터 삭제에 실패했습니다.") # 선택된 이름의 캐릭터를 찾지 못한 경우 등
+                     st.warning("캐릭터 삭제에 실패했습니다. (캐릭터를 찾을 수 없습니다)")
+            elif not characters:
+                 st.info("삭제할 캐릭터가 없습니다.")
             else:
-                 st.info("삭제할 캐릭터를 선택해주세요.") # 이미 캐릭터가 없거나 선택된 캐릭터가 유효하지 않은 경우
+                 st.info("유효한 캐릭터가 선택되지 않았습니다.") # Should not happen with proper state management but as safeguard
 
 
     # --- 캐릭터 추가 입력 UI (조건부 표시) ---
     if st.session_state.get("show_add_char_form"):
-        with st.container(border=True): # 입력 폼을 컨테이너로 감싸서 시각적으로 구분
+        with st.container(border=True): # Visually distinct container
             st.markdown("#### 새 캐릭터 추가")
             with st.form("add_character_input_form", clear_on_submit=True):
                 new_char_name_input = st.text_input("캐릭터 이름을 입력하세요:", key="add_char_name_input")
@@ -356,37 +383,39 @@ def _render_character_management(data):
 
                 if submit_add_button:
                     if new_char_name_input:
-                        valid_char_names = [c.get("name") for c in characters if isinstance(c, dict) and c.get("name")]
-                        if new_char_name_input not in valid_char_names:
+                        valid_char_names_current = [c.get("name") for c in data.get("characters", []) if isinstance(c, dict) and c.get("name")] # Get latest list
+                        if new_char_name_input not in valid_char_names_current:
                             new_character = {
                                 "name": new_char_name_input,
                                 "daily_tasks": DAILY_TASK_TEMPLATE.copy(),
                                 "weekly_tasks": WEEKLY_TASK_TEMPLATE.copy()
                             }
                             new_character["daily_tasks"]["길드 출석"] = data.get("shared_tasks", {}).get("길드 출석", 0)
-                            characters.append(new_character)
+                            data["characters"].append(new_character) # Add to the list in data
                             save_data_to_server_file(data)
                             st.success(f"'{new_char_name_input}' 캐릭터가 추가되었습니다.")
-                            st.session_state.selected_char = new_char_name_input
-                            st.session_state.show_add_char_form = False # 폼 숨김
-                            st.rerun()
+                            st.session_state.selected_char = new_char_name_input # Auto-select new char
+                            st.session_state.show_add_char_form = False # Hide form
+                            st.rerun() # Update UI (selectbox options, tasks)
                         else:
                             st.warning("이미 존재하는 이름입니다.")
                     else:
                         st.warning("캐릭터 이름을 입력해주세요.")
                 elif cancel_add_button:
-                     st.session_state.show_add_char_form = False # 폼 숨김
-                     st.rerun()
+                     st.session_state.show_add_char_form = False # Hide form
+                     st.rerun() # Hide form immediately
 
 
     # --- 캐릭터 변경 입력 UI (조건부 표시) ---
     if st.session_state.get("show_modify_char_form"):
          selected_char_name_to_modify = st.session_state.get("selected_char")
-         # 변경 대상 캐릭터가 유효한 경우에만 폼 표시
-         if selected_char_name_to_modify and selected_char_name_to_modify in [c.get("name") for c in characters if isinstance(c, dict) and c.get("name")]:
-              with st.container(border=True): # 입력 폼을 컨테이너로 감싸서 시각적으로 구분
+         valid_char_names = [c.get("name") for c in characters if isinstance(c, dict) and c.get("name")]
+         # Only show form if a valid character is selected for modification
+         if selected_char_name_to_modify and selected_char_name_to_modify in valid_char_names:
+              with st.container(border=True): # Visually distinct container
                    st.markdown(f"#### '{selected_char_name_to_modify}' 이름 변경")
-                   with st.form("modify_character_input_form", clear_on_submit=False): # 변경 중에는 clear 안함
+                   with st.form("modify_character_input_form", clear_on_submit=False): # Don't clear input on submit failure
+                        # Pre-fill with current name
                         new_char_name_input = st.text_input("새 이름을 입력하세요:", value=selected_char_name_to_modify, key="modify_char_name_input")
                         col_modify_form1, col_modify_form2 = st.columns(2)
                         with col_modify_form1:
@@ -397,19 +426,20 @@ def _render_character_management(data):
 
                         if submit_modify_button:
                              if new_char_name_input and new_char_name_input != selected_char_name_to_modify:
-                                # 다른 캐릭터 이름과 중복 확인
-                                other_char_names = [c.get("name") for c in characters if isinstance(c, dict) and c.get("name") and c.get("name") != selected_char_name_to_modify]
+                                # Check for duplicate name among *other* characters
+                                other_char_names = [c.get("name") for c in data.get("characters", []) if isinstance(c, dict) and c.get("name") and c.get("name") != selected_char_name_to_modify]
                                 if new_char_name_input not in other_char_names:
-                                   # 해당 캐릭터 찾아서 이름 변경
-                                   for char in characters:
-                                       if isinstance(char, dict) and char.get("name") == selected_char_name_to_modify:
-                                           char["name"] = new_char_name_input
-                                           save_data_to_server_file(data)
-                                           st.success(f"'{selected_char_name_to_modify}' 캐릭터 이름이 '{new_char_name_input}'(으)로 변경되었습니다.")
-                                           st.session_state.selected_char = new_char_name_input
-                                           st.session_state.show_modify_char_form = False # 폼 숨김
-                                           st.rerun()
-                                           break # 찾았으면 루프 중단
+                                   # Find and update the character's name
+                                   found_char = next((c for c in data["characters"] if isinstance(c, dict) and c.get("name") == selected_char_name_to_modify), None)
+                                   if found_char:
+                                       found_char["name"] = new_char_name_input
+                                       save_data_to_server_file(data)
+                                       st.success(f"'{selected_char_name_to_modify}' 캐릭터 이름이 '{new_char_name_input}'(으)로 변경되었습니다.")
+                                       st.session_state.selected_char = new_char_name_input # Update selected state
+                                       st.session_state.show_modify_char_form = False # Hide form
+                                       st.rerun() # Update UI
+                                   else:
+                                        st.error("변경 대상 캐릭터를 찾을 수 없습니다. (데이터 불일치)") # Should not happen
                                 else:
                                     st.warning("이미 존재하는 이름입니다.")
                              elif new_char_name_input == selected_char_name_to_modify:
@@ -417,9 +447,9 @@ def _render_character_management(data):
                              else:
                                  st.warning("새 이름을 입력해주세요.")
                         elif cancel_modify_button:
-                             st.session_state.show_modify_char_form = False # 폼 숨김
-                             st.rerun()
-         else: # 변경 대상 캐릭터가 유효하지 않으면 폼 표시 플래그 초기화
+                             st.session_state.show_modify_char_form = False # Hide form
+                             st.rerun() # Hide form immediately
+         else: # If no valid character is selected when modify form is supposed to show, reset the flag
               st.session_state.show_modify_char_form = False
 
 
@@ -430,60 +460,70 @@ def _render_tasks(data):
     characters = data.get("characters", [])
     shared_tasks = data.get("shared_tasks", {}) # 안전하게 데이터 접근
 
-    # 유효한 캐릭터 이름 목록 생성 (selectbox 렌더링 시 이미 수행됨)
+    # 유효한 캐릭터 이름 목록 생성
     valid_char_names = [c.get("name") for c in characters if isinstance(c, dict) and c.get("name") is not None]
 
-    # 캐릭터 목록이 비어있거나 선택된 캐릭터가 유효하지 않으면 숙제 목록을 표시하지 않음
+    # Determine the currently selected character data
+    selected_char_data = None
     selected_char_name = st.session_state.get("selected_char")
-    if not characters or selected_char_name not in valid_char_names:
-         # 캐릭터 관리 섹션에서 이미 메시지 및 구분선 처리됨
-         return # 함수 종료
+    if selected_char_name and selected_char_name in valid_char_names:
+         selected_char_data = next((c for c in characters if isinstance(c, dict) and c.get("name") == selected_char_name), None)
 
-    # 선택된 캐릭터 데이터 찾기
-    selected_char_data = next((c for c in characters if isinstance(c, dict) and c.get("name") == selected_char_name), None)
 
-    if selected_char_data:
+    # Only render task sections if characters exist AND a valid character is selected
+    if not characters or not selected_char_data:
+         # No characters or no valid character selected, display instructions.
+         # Character management section already handles messages.
+         # Add the separator after the character management section, before where tasks *would* be.
+         # The separator after selectbox/buttons is rendered in the main app logic.
+         # If this function runs because there are no characters, we don't need task headers/separators.
+         pass # Do nothing, the character management section handled the "no characters" case.
+         # The separator *after* character management section is in main app logic.
+    else:
+        # A valid character is selected, render tasks for this character.
+
         # --- DAILY ---
         st.header("DAILY")
         # --- 구분선 추가: DAILY 헤더와 숙제 목록 사이 ---
         st.markdown("---")
 
         daily_tasks = selected_char_data.get("daily_tasks", {})
-        if not isinstance(daily_tasks, dict): # dict 형태가 아니면 빈 딕셔너리로 초기화
+        if not isinstance(daily_tasks, dict): # Ensure daily_tasks is a dict
             daily_tasks = {}
-            selected_char_data["daily_tasks"] = daily_tasks # 데이터에 반영
+            selected_char_data["daily_tasks"] = daily_tasks # Update data
+
 
         # 길드 출석 (공용) - 모든 캐릭터의 상태 동기화
         current_shared_guild_status = shared_tasks.get("길드 출석", 0)
+        # Key must be unique across all runs, not depending on selected character name
         shared_guild_checked = st.checkbox(
             "길드 출석 (모든 캐릭터 공유)",
             value=current_shared_guild_status == 1,
-            key=f"shared_guild_checkbox" # 공유 상태는 고유 키 사용
+            key=f"shared_guild_checkbox" # Consistent key
         )
         new_shared_guild_status = 1 if shared_guild_checked else 0
-        # 값이 변경되었을 때만 업데이트 및 동기화
+        # Update shared status in data if it changed
         if data.get("shared_tasks", {}).get("길드 출석", 0) != new_shared_guild_status:
-             if "shared_tasks" not in data or data["shared_tasks"] is None:
-                  data["shared_tasks"] = {} # shared_tasks 항목 없으면 생성
+             if not isinstance(data.get("shared_tasks"), dict): # Ensure shared_tasks is a dict
+                  data["shared_tasks"] = {}
              data["shared_tasks"]["길드 출석"] = new_shared_guild_status
-             # 모든 캐릭터의 길드 출석 상태를 공유 상태로 동기화
+             # Sync all characters' guild status
              for char in characters:
-                  if isinstance(char, dict) and "daily_tasks" in char and isinstance(char["daily_tasks"], dict): # daily_tasks 항목이 있는 유효한 캐릭터인 경우에만 업데이트
+                  if isinstance(char, dict) and isinstance(char.get("daily_tasks"), dict):
                      char["daily_tasks"]["길드 출석"] = new_shared_guild_status
-             save_data_to_server_file(data) # 데이터 변경 후 저장
-             st.rerun() # 공유 상태 변경 시 즉시 반영
-
+             save_data_to_server_file(data)
+             st.rerun() # Rerun to update all UIs using shared status
 
         # 일일 숙제 목록 표시 (DAILY_TASK_TEMPLATE 기준으로 표시)
         for task, template_state in DAILY_TASK_TEMPLATE.items():
             if task == "길드 출석":
-                continue # 이미 위에서 처리함
+                continue # Skip shared task here
 
-            # 현재 캐릭터 데이터에서 해당 숙제 상태 가져오기 (없으면 템플릿 기본값)
+            # Get current state for the task (default to template if not found or invalid)
             current_task_state = daily_tasks.get(task, template_state)
 
             if task == "망령의 탑":
-                # 망령의 탑은 일일/완료 두 가지 상태 관리
+                # Handle '망령의 탑' which has nested state
                 mt_state = current_task_state if isinstance(current_task_state, dict) else {"daily": 0, "complete": False}
                 daily_done = mt_state.get("daily", 0) == 1
                 complete_done = mt_state.get("complete", False)
@@ -494,37 +534,42 @@ def _render_tasks(data):
                     daily_checked = st.checkbox(
                         f"일일 완료",
                         value=daily_done,
-                        key=f"{selected_char_name}_{task}_daily_checkbox"
+                        key=f"{selected_char_name}_{task}_daily_checkbox" # Key unique to char and task
                     )
+                    # Update data if checkbox state changed
+                    # Ensure nested structure exists
                     if not isinstance(daily_tasks.get(task), dict): daily_tasks[task] = {"daily": 0, "complete": False}
                     new_daily_status = 1 if daily_checked else 0
                     if daily_tasks[task].get("daily", 0) != new_daily_status:
                         daily_tasks[task]["daily"] = new_daily_status
                         save_data_to_server_file(data)
-                        st.rerun()
+                        st.rerun() # Rerun to reflect state change
 
                 with col_mt2:
                     complete_checked = st.checkbox(
                         f"주간 완료 (일일 초기화 안됨)",
                         value=complete_done,
-                        key=f"{selected_char_name}_{task}_complete_checkbox"
+                        key=f"{selected_char_name}_{task}_complete_checkbox" # Key unique to char and task
                     )
+                    # Update data if checkbox state changed
+                    # Ensure nested structure exists
                     if not isinstance(daily_tasks.get(task), dict): daily_tasks[task] = {"daily": 0, "complete": False}
                     new_complete_status = complete_checked
                     if daily_tasks[task].get("complete", False) != new_complete_status:
                          daily_tasks[task]["complete"] = new_complete_status
                          save_data_to_server_file(data)
-                         st.rerun()
+                         st.rerun() # Rerun to reflect state change
 
 
-            else: # 횟수 차감 방식 숙제
+            else: # Standard count-based tasks
                 count = current_task_state if isinstance(current_task_state, int) else template_state
                 st.markdown(f"**{task}:** 남은 횟수 {count}")
                 if count > 0:
-                    if st.button(f"{task} 1회 완료", key=f"{selected_char_name}_{task}_daily_btn"):
+                    # Button to decrement count
+                    if st.button(f"{task} 1회 완료", key=f"{selected_char_name}_{task}_daily_btn"): # Key unique to char and task
                         daily_tasks[task] = count - 1
                         save_data_to_server_file(data)
-                        st.rerun()
+                        st.rerun() # Rerun to reflect state change
                 else:
                      st.text("✔️ 완료")
 
@@ -539,22 +584,24 @@ def _render_tasks(data):
         st.markdown("---")
 
         weekly_tasks = selected_char_data.get("weekly_tasks", {})
-        if not isinstance(weekly_tasks, dict): # dict 형태가 아니면 빈 딕셔너리로 초기화
+        if not isinstance(weekly_tasks, dict): # Ensure weekly_tasks is a dict
              weekly_tasks = {}
              selected_char_data["weekly_tasks"] = weekly_tasks
 
 
         # 주간 숙제 목록 표시 (WEEKLY_TASK_TEMPLATE 기준으로 표시)
         for task, template_count in WEEKLY_TASK_TEMPLATE.items():
+             # Get current count for the task (default to template if not found or invalid)
              current_task_count = weekly_tasks.get(task, template_count)
              count = current_task_count if isinstance(current_task_count, int) else template_count
 
              st.markdown(f"**{task}:** 남은 횟수 {count}")
              if count > 0:
-                 if st.button(f"{task} 1회 완료", key=f"{selected_char_name}_{task}_weekly_btn"):
+                 # Button to decrement count
+                 if st.button(f"{task} 1회 완료", key=f"{selected_char_name}_{task}_weekly_btn"): # Key unique to char and task
                      weekly_tasks[task] = count - 1
                      save_data_to_server_file(data)
-                     st.rerun()
+                     st.rerun() # Rerun to reflect state change
              else:
                  st.text("✔️ 완료")
 
@@ -562,12 +609,8 @@ def _render_tasks(data):
         st.markdown("---")
 
 
-    else: # Should not happen if selected_char_name is valid and characters list is not empty, but as a safeguard
-        st.info("선택된 캐릭터 정보를 불러올 수 없습니다.")
-        # Safeguard: Render default separators if something went wrong
-        st.markdown("---") # DAILY section separator
-        st.markdown("---") # WEEKLY section separator
-        st.markdown("---") # Data management separator
+    # No else block needed for selected_char_data is None, as the outer if handles this case
+    # The final separator before data management is handled in the main app logic.
 
 
 def _render_data_management(data):
@@ -578,7 +621,7 @@ def _render_data_management(data):
 
     if st.button("데이터 관리 열기/닫기", key="toggle_data_management"):
         st.session_state.show_data_management = not show_data_management
-        st.rerun()
+        st.rerun() # Rerun to show/hide the section
 
     if st.session_state.get("show_data_management", False):
         st.subheader("데이터 관리 메뉴")
@@ -595,8 +638,11 @@ def _render_data_management(data):
         # JSON 업로드
         uploaded_file = st.file_uploader("JSON 파일 업로드", type="json", key="upload_json")
         if uploaded_file is not None:
-            load_data(uploaded_file) # load_data handles loading, validation, auto-reset and saving to server file
-            # load_data 내부에서 필요한 경우 rerun 호출
+            # load_data handles loading, validation, auto-reset, and saving to server file.
+            # It will also trigger a rerun if needed.
+            load_data(uploaded_file)
+            # No explicit rerun needed here as load_data takes care of it
+
 
         # 수동 초기화 버튼
         col_reset1, col_reset2 = st.columns(2)
@@ -607,7 +653,8 @@ def _render_data_management(data):
                 if not isinstance(data.get("last_reset_timestamps"), dict): data["last_reset_timestamps"] = {}
                 data["last_reset_timestamps"]["daily"] = datetime.now(KST).isoformat()
                 save_data_to_server_file(data)
-                st.rerun()
+                st.rerun() # Update UI
+
         with col_reset2:
             if st.button("주간 숙제 수동 초기화", key="manual_weekly_reset"):
                 perform_weekly_reset(data)
@@ -615,107 +662,112 @@ def _render_data_management(data):
                 if not isinstance(data.get("last_reset_timestamps"), dict): data["last_reset_timestamps"] = {}
                 data["last_reset_timestamps"]["weekly"] = datetime.now(KST).isoformat()
                 save_data_to_server_file(data)
-                st.rerun()
+                st.rerun() # Update UI
 
 
 # --- 메인 애플리케이션 로직 ---
 
 # Add custom CSS for font size and spacing adjustments
-st.markdown("""
+st.markdown('''
 <style>
-/* 전체 글자 크기 및 여백 조정 */
-/* root 폰트 사이즈를 줄여서 전체적으로 작게 만듭니다. */
+/* Global Font and Spacing Adjustments */
+/* Base font size for the document */
 html {
     font-size: 14px !important;
 }
-/* 일부 요소의 폰트 사이즈 재조정 */
-body, [class*="st-emotion"], [class*="stText"] {
-    font-size: 1em !important; /* 14px 기준 */
-    line-height: 1.4 !important; /* 줄 간격 */
+/* Text size for most elements relative to html font size */
+body, [class*="st-emotion"], [class*="stText"], label {
+    font-size: 1em !important; /* 14px */
+    line-height: 1.4 !important; /* Reduced line height */
 }
 
-/* 제목 크기 및 여백 조정 */
+/* Title and Header Spacing */
 h1 { font-size: 1.8em !important; margin-top: 0.5em !important; margin-bottom: 0.5em !important; }
-/* DAILY, WEEKLY 헤더 크기 확대 */
-h2 { font-size: 1.6em !important; margin-top: 1em !important; margin-bottom: 0.4em !important; }
+/* DAILY, WEEKLY 헤더 크기 확대 및 여백 조정 */
+h2 { font-size: 1.6em !important; margin-top: 1em !important; margin-bottom: 0.4em !important; padding-bottom: 0 !important; } /* Ensure h2 has less bottom padding */
 h3 { font-size: 1.1em !important; margin-top: 0.8em !important; margin-bottom: 0.3em !important; }
-h4 { font-size: 1em !important; margin-top: 0.6em !important; margin-bottom: 0.2em !important; } /* Added for form titles */
+h4 { font-size: 1em !important; margin-top: 0.6em !important; margin-bottom: 0.2em !important; } /* Used for form titles */
 
 
-/* 버튼 크기 및 패딩 조정 */
+/* Button Sizing and Padding */
 div[data-testid="stButton"] button {
-    font-size: 0.9em !important; /* 14px 기준 0.9em */
-    padding: 0.3em 0.6em !important; /* 상하 좌우 패딩 */
-    margin: 0.2em 0 !important; /* 버튼 위아래 마진 */
+    font-size: 0.9em !important; /* Slightly smaller than base text */
+    padding: 0.3em 0.6em !important; /* Reduced padding */
+    margin: 0.2em 0 !important; /* Reduced vertical margin */
 }
 
-/* 체크박스 라벨 크기 조정 */
+/* Checkbox Label Size and Spacing */
 div[data-testid="stCheckbox"] label {
-    font-size: 1em !important; /* 14px 기준 */
-    margin-bottom: 0.3em !important; /* 체크박스 아래 마진 */
-    padding-top: 0 !important; /* 체크박스 위쪽 패딩 줄임 */
-    padding-bottom: 0 !important; /* 체크박스 아래쪽 패딩 줄임 */
+    font-size: 1em !important; /* Base font size */
+    margin-bottom: 0.3em !important; /* Reduced bottom margin */
+    padding-top: 0 !important; /* Remove top padding */
+    padding-bottom: 0 !important; /* Remove bottom padding */
 }
 
-/* 입력 필드 및 셀렉트 박스 라벨 크기 조정 */
+/* Input Label Size and Spacing */
 div[data-testid="stTextInput"] label,
 div[data-testid="stSelectbox"] label,
 div[data-testid="stFileUploader"] label {
-    font-size: 1em !important; /* 14px 기준 */
-    margin-bottom: 0.1em !important;
+    font-size: 1em !important; /* Base font size */
+    margin-bottom: 0.1em !important; /* Reduced bottom margin */
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
 }
 
-/* 입력 필드 내부 텍스트 크기 및 패딩 조정 */
+/* Input Field Text Size and Padding */
 div[data-testid="stTextInput"] input {
-     font-size: 1em !important; /* 14px 기준 */
-     padding: 0.3em 0.6em !important;
+     font-size: 1em !important; /* Base font size */
+     padding: 0.3em 0.6em !important; /* Reduced padding */
 }
 
-/* selectbox 선택된 값 텍스트 크기 조정 */
+/* Selectbox Selected Value Text Size */
 div[data-testid="stSelectbox"] div[data-testid="stText"] {
-     font-size: 1em !important; /* 14px 기준 */
+     font-size: 1em !important; /* Base font size */
 }
-/* selectbox 드롭다운 목록 텍스트 크기 조정 (셀렉터 복잡할 수 있음, 일부 환경에서만 적용될 수 있음) */
+/* Selectbox dropdown list text size (might not apply everywhere) */
 /* .stSelectbox > div > div > div > div { font-size: 1em !important; } */
 
 
-/* markdown으로 만든 텍스트 (예: 숙제 이름) 마진 조정 */
+/* Markdown Text Spacing (e.g., task names) */
+/* Targets markdown output, often wrapped in p tags inside markdown container */
 div[data-testid="stMarkdownContainer"] {
-     margin-top: 0.4em !important; /* 마크다운 위 마진 */
-     margin-bottom: 0.2em !important; /* 마크다운 아래 마진 */
+     margin-top: 0.4em !important; /* Reduced top margin */
+     margin-bottom: 0.2em !important; /* Reduced bottom margin */
      padding-top: 0 !important;
      padding-bottom: 0 !important;
 }
 div[data-testid="stMarkdownContainer"] p {
-    margin: 0 !important; /* p 태그 기본 마진 제거 */
+    margin: 0 !important; /* Ensure p tag default margins are removed */
     padding: 0 !important;
 }
 
-/* 구분선 마진 조정 */
+/* Horizontal Rule (Separator) Spacing */
 hr {
-    margin-top: 0.8em !important; /* 구분선 위 마진 */
-    margin-bottom: 0.8em !important; /* 구분선 아래 마진 */
+    margin-top: 0.8em !important; /* Reduced top margin */
+    margin-bottom: 0.8em !important; /* Reduced bottom margin */
 }
 
-/* Form 컨테이너 마진/패딩 조정 */
-div[data-testid="stForm"] {
-    padding: 0.8em !important; /* 폼 내부 패딩 */
-    margin-bottom: 1em !important; /* 폼 아래 마진 */
-}
-
-/* 컨테이너 (border=True) 패딩/마진 조정 */
+/* Form Container Padding/Margin */
+/* This targets the border=True containers used for add/modify input forms */
 div[data-testid="stVerticalBlock"] div[data-testid="stVerticalBlock"] {
-    margin-bottom: 0.8em !important; /* 컨테이너 블록 아래 마진 */
-    padding: 0.8em !important; /* 컨테이너 내부 패딩 */
+    margin-top: 0.8em !important; /* Add margin above the form container */
+    margin-bottom: 1em !important; /* Reduced margin below the form container */
+    padding: 0.8em !important; /* Padding inside the container */
+}
+
+/* Form itself padding */
+div[data-testid="stForm"] {
+    padding: 0 !important; /* Remove default form padding as container has padding */
 }
 
 
-/* 컬럼 간 간격 조정 (기본 gap 줄이기) */
+/* Column Gap Adjustment */
+/* Reduces horizontal space between columns */
 div[data-testid="stHorizontalBlock"] {
-    gap: 0.8rem !important; /* 컬럼 사이 간격 */
+    gap: 0.8rem !important; /* Reduced gap */
 }
 
-/* 정보/경고/성공 메시지 박스 마진 조정 */
+/* Alert Message Boxes Spacing */
 div[data-testid="stAlert"] {
     margin-top: 0.5em !important;
     margin-bottom: 0.5em !important;
@@ -725,7 +777,7 @@ div[data-testid="stAlert"] {
 
 
 </style>
-""", unsafe_allow_html=True)
+''', unsafe_allow_html=True)
 
 
 # 데이터 로드 (앱 실행 시 최초 1회 또는 파일 업로드 시)
@@ -739,19 +791,17 @@ app_data = st.session_state.data
 # --- 메인 타이틀 ---
 st.title(APP_TITLE)
 
-
 # --- UI 렌더링 함수 호출 ---
 _render_character_management(app_data)
 
 # 구분선 추가 (캐릭터 관리 섹션과 숙제/선택 섹션 사이)
-# 이 구분선은 _render_character_management 함수의 마지막 콤보박스/버튼 그룹과 _render_tasks 함수의 시작 (DAILY 헤더) 사이에 위치합니다.
-# _render_tasks 함수 내부에서 selectbox와 DAILY 헤더 사이의 구분선이 추가됩니다.
+# 이 구분선은 캐릭터 selectbox/button row 와 DAILY 헤더 사이에 위치합니다.
+st.markdown("---")
 
 _render_tasks(app_data)
 # _render_tasks 함수 내부에서 DAILY 섹션 끝과 WEEKLY 섹션 끝에 구분선이 추가됩니다.
 
-# 데이터 관리 섹션 헤더는 _render_data_management 함수 내에 있으므로 별도 구분선 없이 호출합니다.
+# 데이터 관리 섹션은 _render_tasks 마지막 구분선 바로 아래에 옵니다.
 _render_data_management(app_data)
 
 # 데이터 관리 섹션 하단에는 별도 구분선이 필요 없습니다.
-
