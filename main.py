@@ -310,6 +310,7 @@ def _render_character_management(data):
             disabled=not characters # Disable if no characters
         )
         # Update session state based on selectbox value (only if it's not the default '캐릭터 없음' when characters exist)
+        # This ensures st.session_state.selected_char always reflects the selectbox value, unless '캐릭터 없음' is selected and there are actual characters (a safeguard).
         if selected_char_name != "캐릭터 없음":
              st.session_state.selected_char = selected_char_name
         elif characters and st.session_state.selected_char not in valid_char_names: # Safeguard: if selectbox shows '캐릭터 없음' but characters exist and selected_char is invalid
@@ -619,9 +620,10 @@ def _render_data_management(data):
         st.subheader("데이터 관리 메뉴")
 
         # JSON 다운로드
+        # save_data() is called here to generate the data string for download
         st.download_button(
             label="JSON 파일 다운로드",
-            data=save_data(), # save_data gets current state and updates timestamps before returning JSON string
+            data=save_data(),
             file_name="mabinogi_tasks.json",
             mime="application/json",
             key="download_json"
@@ -659,110 +661,8 @@ def _render_data_management(data):
 
 # --- 메인 애플리케이션 로직 ---
 
-# Add custom CSS for font size and spacing adjustments
-st.markdown('''
-<style>
-/* Global Font and Spacing Adjustments */
-/* Base font size for the document */
-html {
-    font-size: 14px !important; /* You can try adjusting this base size */
-}
-/* Text size for most elements relative to html font size */
-body, [class*="st-emotion"], [class*="stText"], label {
-    font-size: 1em !important; /* 14px */
-    line-height: 1.4 !important; /* Reduced line height */
-}
-
-/* Title and Header Spacing */
-h1 { font-size: 1.8em !important; margin-top: 0.5em !important; margin-bottom: 0.5em !important; }
-/* DAILY, WEEKLY 헤더 크기 확대 및 여백 조정 */
-h2 { font-size: 1.6em !important; margin-top: 1em !important; margin-bottom: 0.4em !important; padding-bottom: 0 !important; }
-h3 { font-size: 1.1em !important; margin-top: 0.8em !important; margin-bottom: 0.3em !important; }
-h4 { font-size: 1em !important; margin-top: 0.6em !important; margin-bottom: 0.2em !important; }
-
-
-/* Button Sizing and Padding */
-div[data-testid="stButton"] button {
-    font-size: 0.9em !important;
-    padding: 0.3em 0.6em !important;
-    margin: 0.2em 0 !important; /* <--- Error reported here */
-}
-
-/* Checkbox Label Size and Spacing */
-div[data-testid="stCheckbox"] label {
-    font-size: 1em !important;
-    margin-bottom: 0.3em !important;
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-}
-
-/* Input Label Size and Spacing */
-div[data-testid="stTextInput"] label,
-div[data-testid="stSelectbox"] label,
-div[data-testid="stFileUploader"] label {
-    font-size: 1em !important;
-    margin-bottom: 0.1em !important;
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-}
-
-/* Input Field Text Size and Padding */
-div[data-testid="stTextInput"] input {
-     font-size: 1em !important;
-     padding: 0.3em 0.6em !important;
-}
-
-/* Selectbox Selected Value Text Size */
-div[data-testid="stSelectbox"] div[data-testid="stText"] {
-     font-size: 1em !important;
-}
-
-/* Markdown Text Spacing (e.g., task names) */
-div[data-testid="stMarkdownContainer"] {
-     margin-top: 0.4em !important;
-     margin-bottom: 0.2em !important;
-     padding-top: 0 !important;
-     padding-bottom: 0 !important;
-}
-div[data-testid="stMarkdownContainer"] p {
-    margin: 0 !important;
-    padding: 0 !important;
-}
-
-/* Horizontal Rule (Separator) Spacing */
-hr {
-    margin-top: 0.8em !important;
-    margin-bottom: 0.8em !important;
-}
-
-/* Container (with border=True) Padding/Margin */
-/* This targets the border=True containers used for add/modify input forms */
-div[data-testid="stVerticalBlock"] div[data-testid="stVerticalBlock"] {
-    margin-top: 0.8em !important;
-    margin-bottom: 1em !important;
-    padding: 0.8em !important;
-}
-
-/* Form itself padding */
-div[data-testid="stForm"] {
-    padding: 0 !important;
-}
-
-/* Column Gap Adjustment */
-div[data-testid="stHorizontalBlock"] {
-    gap: 0.8rem !important;
-}
-
-/* Alert Message Boxes Spacing */
-div[data-testid="stAlert"] {
-    margin-top: 0.5em !important;
-    margin-bottom: 0.5em !important;
-    padding: 0.8em !important;
-    font-size: 0.9em !important;
-}
-
-</style>
-''', unsafe_allow_html=True)
+# REMOVED the entire st.markdown block with CSS
+# st.markdown(''' ... CSS styles ... ''', unsafe_allow_html=True)
 
 
 # 데이터 로드 (앱 실행 시 최초 1회 또는 파일 업로드 시)
