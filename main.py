@@ -2,9 +2,13 @@ import streamlit as st
 import json
 from datetime import datetime, time, date, timedelta
 import pytz # 시간대 처리를 위해 필요
+import os # 파일 처리
 
 # 시간대 설정 (한국 시간)
 KST = pytz.timezone('Asia/Seoul')
+
+# 데이터 저장 파일 경로
+DATA_FILE = "mabinogi_tasks_data.json"
 
 # --- 상수 정의 ---
 # 초기 데이터 구조 기본값
@@ -44,45 +48,84 @@ WEEKLY_TASK_TEMPLATE = {
 
 # --- 헬퍼 함수 ---
 
+def save_data_to_server_file(data):
+    """현재 데이터를 서버 파일에 저장"""
+    try:
+        # 저장 시점의 타임스탬프 업데이트
+        # Ensure last_reset_timestamps exists and is a dict
+        if not isinstance(data.get("last_reset_timestamps"), dict):
+            data["last_reset_timestamps"] = {}
+        data["last_reset_timestamps"]["daily"] = datetime.now(KST).isoformat()
+        data["last_reset_timestamps"]["weekly"] = datetime.now(KST).isoformat()
+
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        # st.sidebar.info("데이터 자동 저장됨") # Optional feedback
+    except Exception as e:
+        st.sidebar.error(f"데이터 자동 저장 실패: {e}") # Indicate save failure
+
+
 def load_data(uploaded_file=None):
     """데이터 로드 및 자동 초기화 처리"""
-    if uploaded_file is not None:
+    data = None
+    loaded_from_file = False
+
+    if 'data' in st.session_state:
+        # 1. Data already in session state (e.g., after rerun), use it
+        data = st.session_state.data
+    elif uploaded_file is not None:
+        # 2. Uploaded file takes next priority if no session state data
         try:
             data = json.load(uploaded_file)
-            # 필수 키가 누락된 경우 기본값으로 초기화 (안전성 강화)
-            if "characters" not in data or "shared_tasks" not in data or "last_reset_timestamps" not in data:
+            # Validate minimum structure after upload
+            if not isinstance(data, dict) or "characters" not in data or "shared_tasks" not in data or "last_reset_timestamps" not in data:
                  st.warning("업로드된 파일 형식이 올바르지 않습니다. 기본 데이터로 로드합니다.")
-                 st.session_state.data = DEFAULT_DATA.copy()
+                 data = DEFAULT_DATA.copy()
             else:
-                st.session_state.data = data
-            st.success("파일이 성공적으로 로드되었습니다.")
+                 st.success("파일이 성공적으로 로드되었습니다.")
+                 loaded_from_file = True # Indicate successful load for saving later
         except Exception as e:
             st.error(f"파일 로드 중 오류 발생: {e}")
-            st.session_state.data = DEFAULT_DATA.copy() # 오류 시 기본값으로
-    elif 'data' not in st.session_state:
-        # 세션에 데이터가 없으면 기본값 로드
-        st.session_state.data = DEFAULT_DATA.copy()
+            data = DEFAULT_DATA.copy() # Error on upload, revert to default
+    else:
+        # 3. No session state data, no upload -> try loading from server file
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                # Validate minimum structure after loading server file
+                if not isinstance(data, dict) or "characters" not in data or "shared_tasks" not in data or "last_reset_timestamps" not in data:
+                     st.warning(f"'{DATA_FILE}' 파일 형식이 올바르지 않습니다. 기본 데이터로 로드합니다.")
+                     data = DEFAULT_DATA.copy()
+                else:
+                     st.info(f"'{DATA_FILE}' 파일에서 데이터를 로드했습니다.")
+                     loaded_from_file = True # Indicate successful load for saving later
+            except Exception as e:
+                st.warning(f"'{DATA_FILE}' 파일 로드 중 오류 발생: {e}. 기본 데이터로 시작합니다.")
+                data = DEFAULT_DATA.copy()
+        else:
+            # 4. No file exists, load default data
+            st.info(f"'{DATA_FILE}' 파일이 없습니다. 새 데이터로 시작합니다.")
+            data = DEFAULT_DATA.copy()
 
-    # 데이터 로드 후 자동 초기화 확인 및 수행 (필요한 경우)
+    # Ensure session state is initialized with loaded/default data
+    if 'data' not in st.session_state or st.session_state.data is None:
+         st.session_state.data = data
+
+    # Perform auto-reset based on loaded data (or default data)
     check_and_perform_auto_reset()
 
-def save_data():
-    """현재 데이터를 JSON 문자열로 반환 (다운로드용)"""
-    # 저장 시점의 타임스탬프 업데이트
-    st.session_state.data["last_reset_timestamps"]["daily"] = datetime.now(KST).isoformat()
-    st.session_state.data["last_reset_timestamps"]["weekly"] = datetime.now(KST).isoformat()
-    return json.dumps(st.session_state.data, indent=4, ensure_ascii=False)
+    # Save data to server file after initial load if it came from file or default
+    # This ensures the file exists and contains the current state (including potential auto-resets)
+    # If loaded from uploaded_file, it's also saved.
+    if loaded_from_file or not os.path.exists(DATA_FILE):
+         save_data_to_server_file(st.session_state.data)
 
-def _get_reset_time(base_datetime, hour=6, minute=0):
-    """기준 시간으로부터 특정 시분으로 설정된 datetime 객체를 반환 (시간대 고려)"""
-    reset_time_today = base_datetime.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    # 기준 시간의 time 부분이 reset_time보다 앞설 경우 하루 전으로 설정
-    if base_datetime.time() < time(hour, minute):
-        reset_time = reset_time_today - timedelta(days=1)
-    else:
-        reset_time = reset_time_today
 
-    return reset_time.astimezone(KST) # 한국 시간대로 보정
+def _set_time_to_datetime(dt, hour=6, minute=0):
+    """Sets the time of a datetime object to a specific hour and minute, preserving date and timezone."""
+    return dt.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
 
 def perform_daily_reset(data):
     """일일 숙제 초기화 로직 (망령의 탑 완료 제외)"""
@@ -149,7 +192,8 @@ def check_and_perform_auto_reset():
 
     # 마지막 초기화 시간 가져오기 (없거나 유효하지 않으면 아주 과거 시간으로 설정)
     last_daily_reset = datetime.min.replace(tzinfo=KST)
-    last_daily_reset_str = data.get("last_reset_timestamps", {}).get("daily") # 안전하게 접근
+    last_reset_ts = data.get("last_reset_timestamps", {}) # 안전하게 접근
+    last_daily_reset_str = last_reset_ts.get("daily")
     if last_daily_reset_str:
         try:
             last_daily_reset = datetime.fromisoformat(last_daily_reset_str).astimezone(KST)
@@ -157,46 +201,54 @@ def check_and_perform_auto_reset():
             pass # 유효하지 않으면 기본값 유지
 
     last_weekly_reset = datetime.min.replace(tzinfo=KST)
-    last_weekly_reset_str = data.get("last_reset_timestamps", {}).get("weekly") # 안전하게 접근
+    last_weekly_reset_str = last_reset_ts.get("weekly")
     if last_weekly_reset_str:
         try:
             last_weekly_reset = datetime.fromisoformat(last_weekly_reset_str).astimezone(KST)
         except (ValueError, TypeError):
              pass # 유효하지 않으면 기본값 유지
 
-    # 일일 초기화 시간 (오늘 오전 6시 기준)
-    today_reset_base = datetime.now(KST) # 현재 시간 기준
-    daily_reset_time = _get_reset_time(today_reset_base, hour=6)
+    # Daily reset time: Today at 6:00 AM KST. If 'now' is before 6 AM KST, it's yesterday's 6 AM.
+    daily_reset_time_today = _set_time_to_datetime(now, hour=6)
+    if now < daily_reset_time_today:
+         daily_reset_time = daily_reset_time_today - timedelta(days=1)
+    else:
+         daily_reset_time = daily_reset_time_today
 
     # 일일 초기화 필요 여부 판단
-    # 마지막 초기화 시간이 오늘 6시 기준 시간보다 이전이면 초기화 필요
+    # 마지막 초기화 시간이 일일 초기화 기준 시간보다 이전이면 초기화 필요
     if last_daily_reset < daily_reset_time:
         perform_daily_reset(data)
-        # last_reset_timestamps 항목이 없으면 생성
-        if "last_reset_timestamps" not in data or data["last_reset_timestamps"] is None:
-             data["last_reset_timestamps"] = {}
-        data["last_reset_timestamps"]["daily"] = now.isoformat() # 초기화 시간 업데이트
-        st.rerun() # 초기화 후 화면 갱신 (필수)
+        # Update timestamp in data object
+        if not isinstance(data.get("last_reset_timestamps"), dict): data["last_reset_timestamps"] = {}
+        data["last_reset_timestamps"]["daily"] = now.isoformat()
+        save_data_to_server_file(data) # Save updated data including new timestamp
+        st.rerun() # Trigger UI update
 
 
-    # 주간 초기화 시간 (이번 주 월요일 오전 6시 기준)
-    today = now.date()
-    monday_date = today - timedelta(days=today.weekday()) # 이번주 월요일 날짜
-    this_monday_reset_base = datetime.combine(monday_date, time(0, 0), tzinfo=KST) # 월요일 0시 기준
-    weekly_reset_time = _get_reset_time(this_monday_reset_base, hour=6) # 월요일 6시 계산
+    # Weekly reset time: This Monday at 6:00 AM KST. If 'now' is before Mon 6 AM KST, it's last Monday 6 AM.
+    today_weekday = now.weekday() # Monday is 0, Sunday is 6
+    # Find this Monday's date
+    this_monday_date = now.date() - timedelta(days=today_weekday)
+    # Datetime for this Monday at 6:00 AM
+    this_monday_reset_time = datetime.combine(this_monday_date, time(6, 0), tzinfo=KST).astimezone(KST) # Ensure KST timezone
 
-    # _get_reset_time 함수가 현재 시간이 6시 이전인 경우 하루 전으로 계산하므로
-    # 월요일 0시~6시 사이에는 지난주 월요일 6시가 기준이 됩니다. 이 로직은 _get_reset_time 내에 포함되어 있습니다.
+    # If current time is before this Monday 6 AM, the reset happened last Monday
+    if now < this_monday_reset_time:
+        weekly_reset_time = this_monday_reset_time - timedelta(days=7)
+    else:
+        weekly_reset_time = this_monday_reset_time
+
 
     # 주간 초기화 필요 여부 판단
-    # 마지막 초기화 시간이 이번 주 월요일 6시 기준 시간보다 이전이면 초기화 필요
+    # 마지막 초기화 시간이 주간 초기화 기준 시간보다 이전이면 초기화 필요
     if last_weekly_reset < weekly_reset_time:
         perform_weekly_reset(data)
-        # last_reset_timestamps 항목이 없으면 생성
-        if "last_reset_timestamps" not in data or data["last_reset_timestamps"] is None:
-             data["last_reset_timestamps"] = {}
-        data["last_reset_timestamps"]["weekly"] = now.isoformat() # 초기화 시간 업데이트
-        st.rerun() # 초기화 후 화면 갱신 (필수)
+        # Update timestamp and save before rerun
+        if not isinstance(data.get("last_reset_timestamps"), dict): data["last_reset_timestamps"] = {}
+        data["last_reset_timestamps"]["weekly"] = now.isoformat()
+        save_data_to_server_file(data) # Save updated data including new timestamp
+        st.rerun() # Trigger UI update
 
 
 # --- UI 렌더링 함수 ---
@@ -228,6 +280,7 @@ def _render_character_management(data):
                         new_character["daily_tasks"]["길드 출석"] = data.get("shared_tasks", {}).get("길드 출석", 0)
 
                         characters.append(new_character)
+                        save_data_to_server_file(data) # 데이터 변경 후 저장
                         st.success(f"'{new_char_name}' 캐릭터가 추가되었습니다.")
                         # 새로 추가된 캐릭터를 자동으로 선택
                         st.session_state.selected_char = new_char_name
@@ -263,13 +316,14 @@ def _render_character_management(data):
                             # 다른 캐릭터 이름과 중복 확인 (수정 대상 캐릭터 제외)
                             other_char_names = [c.get("name") for c in characters if isinstance(c, dict) and c.get("name") and c.get("name") != selected_char_name_for_modify]
                             if new_char_name not in other_char_names:
-                                # 해당 캐릭터 찾아서 이름 변경
-                                for char in characters:
+                               # 해당 캐릭터 찾아서 이름 변경
+                               for char in characters:
                                    if isinstance(char, dict) and char.get("name") == selected_char_name_for_modify:
                                        char["name"] = new_char_name
+                                       save_data_to_server_file(data) # 데이터 변경 후 저장
                                        st.success(f"'{selected_char_name_for_modify}' 캐릭터 이름이 '{new_char_name}'(으)로 변경되었습니다.")
                                        st.session_state.selected_char = new_char_name # 선택된 캐릭터 이름도 업데이트
-                                       st.rerun() # UI 구조 변경(selectbox 옵션) 반영을 위해 rerun
+                                       st.rerun() # UI 구조 변경 반영
                                        break # 찾았으면 루프 중단
                             else:
                                 st.warning("이미 존재하는 이름입니다.")
@@ -302,6 +356,7 @@ def _render_character_management(data):
                     data["characters"] = [c for c in characters if isinstance(c, dict) and c.get("name") != selected_char_name_for_delete]
 
                     if len(data["characters"]) < original_char_count: # 실제로 삭제되었는지 확인
+                         save_data_to_server_file(data) # 데이터 변경 후 저장
                          st.success(f"'{selected_char_name_for_delete}' 캐릭터가 삭제되었습니다.")
                          if data["characters"]:
                              # 남은 캐릭터 중 첫 번째 캐릭터 이름으로 업데이트
@@ -314,6 +369,8 @@ def _render_character_management(data):
             else:
                  st.text("삭제할 캐릭터 없음") # 캐릭터가 0개일 때 또는 선택된 캐릭터가 없을 때
 
+
+# --- UI 렌더링 함수 ---
 
 def _render_tasks(data):
     """숙제 목록 섹션 렌더링 (DAILY, WEEKLY)"""
@@ -341,20 +398,23 @@ def _render_tasks(data):
         key="selected_char_selectbox", # 다른 위젯과의 키 중복 방지를 위해 selectbox 전용 키 사용
         index=valid_char_names.index(st.session_state.selected_char) if st.session_state.selected_char in valid_char_names else 0 # 인덱스 설정
     )
-    # selectbox 선택 결과를 session_state에 저장 (다른 곳에서 사용하기 위함)
-    st.session_state.selected_char = selected_char_name
+    st.session_state.selected_char = selected_char_name # Keep session state in sync
 
 
-    # 선택된 캐릭터 데이터 찾기
+    # --- 구분선 추가: 캐릭터 selectbox와 DAILY 헤더 사이 ---
+    st.markdown("---")
+
+
     selected_char_data = next((c for c in characters if isinstance(c, dict) and c.get("name") == selected_char_name), None)
 
     if selected_char_data:
-        # --- 캐릭터 이름 표시 (라벨 제거) ---
-        st.markdown(f"### {selected_char_name}")
+        # Removed redundant character name display: st.markdown(f"### {selected_char_name}")
 
         # --- DAILY ---
         st.header("DAILY")
-        # daily_tasks가 없거나 None이면 빈 딕셔너리 사용 (안전한 접근)
+        # --- 구분선 추가: DAILY 헤더와 숙제 목록 사이 ---
+        st.markdown("---")
+
         daily_tasks = selected_char_data.get("daily_tasks", {})
         if not isinstance(daily_tasks, dict): # dict 형태가 아니면 빈 딕셔너리로 초기화
             daily_tasks = {}
@@ -368,9 +428,7 @@ def _render_tasks(data):
             value=current_shared_guild_status == 1,
             key=f"shared_guild_checkbox" # 공유 상태는 고유 키 사용
         )
-        # 체크박스 상태 변경 시 공유 상태 및 모든 캐릭터 상태 업데이트
         new_shared_guild_status = 1 if shared_guild_checked else 0
-        # 값이 변경되었을 때만 업데이트 및 동기화
         if data.get("shared_tasks", {}).get("길드 출석", 0) != new_shared_guild_status:
              if "shared_tasks" not in data or data["shared_tasks"] is None:
                   data["shared_tasks"] = {} # shared_tasks 항목 없으면 생성
@@ -379,7 +437,9 @@ def _render_tasks(data):
              for char in characters:
                   if isinstance(char, dict) and "daily_tasks" in char and isinstance(char["daily_tasks"], dict): # daily_tasks 항목이 있는 유효한 캐릭터인 경우에만 업데이트
                      char["daily_tasks"]["길드 출석"] = new_shared_guild_status
+             save_data_to_server_file(data) # 데이터 변경 후 저장
              st.rerun() # 공유 상태 변경 시 즉시 반영
+
 
         # 일일 숙제 목록 표시 (DAILY_TASK_TEMPLATE 기준으로 표시)
         # 템플릿의 순서대로 표시하기 위해 템플릿을 순회
@@ -414,6 +474,7 @@ def _render_tasks(data):
                     new_daily_status = 1 if daily_checked else 0
                     if daily_tasks[task].get("daily", 0) != new_daily_status:
                         daily_tasks[task]["daily"] = new_daily_status
+                        save_data_to_server_file(data) # 데이터 변경 후 저장
                         st.rerun() # 상태 변경 시 즉시 반영
 
                 with col_mt2:
@@ -431,6 +492,7 @@ def _render_tasks(data):
                     new_complete_status = complete_checked
                     if daily_tasks[task].get("complete", False) != new_complete_status:
                          daily_tasks[task]["complete"] = new_complete_status
+                         save_data_to_server_file(data) # 데이터 변경 후 저장
                          st.rerun() # 상태 변경 시 즉시 반영
 
 
@@ -443,22 +505,25 @@ def _render_tasks(data):
                     # key에 캐릭터 이름 포함
                     if st.button(f"{task} 1회 완료", key=f"{selected_char_name}_{task}_daily_btn"):
                         daily_tasks[task] = count - 1 # 횟수 차감
+                        save_data_to_server_file(data) # 데이터 변경 후 저장
                         st.rerun() # 변경사항 즉시 반영
                 else:
                      st.text("✔️ 완료")
 
 
-        # --- DAILY 섹션 끝, 구분선 추가 ---
+        # --- DAILY 섹션 끝, 구분선 추가 (WEEKLY 시작 전) ---
         st.markdown("---")
 
 
         # --- WEEKLY ---
         st.header("WEEKLY")
-        # weekly_tasks가 없거나 None이면 빈 딕셔너리 사용 (안전한 접근)
+        # --- 구분선 추가: WEEKLY 헤더와 숙제 목록 사이 ---
+        st.markdown("---")
+
         weekly_tasks = selected_char_data.get("weekly_tasks", {})
         if not isinstance(weekly_tasks, dict): # dict 형태가 아니면 빈 딕셔너리로 초기화
              weekly_tasks = {}
-             selected_char_data["weekly_tasks"] = weekly_tasks # 데이터에 반영
+             selected_char_data["weekly_tasks"] = weekly_tasks
 
 
         # 주간 숙제 목록 표시 (WEEKLY_TASK_TEMPLATE 기준으로 표시)
@@ -474,28 +539,27 @@ def _render_tasks(data):
                  # key에 캐릭터 이름 포함
                  if st.button(f"{task} 1회 완료", key=f"{selected_char_name}_{task}_weekly_btn"):
                      weekly_tasks[task] = count - 1 # 횟수 차감
+                     save_data_to_server_file(data) # 데이터 변경 후 저장
                      st.rerun() # 변경사항 즉시 반영
              else:
                  st.text("✔️ 완료")
 
-        # --- WEEKLY 섹션 끝, 구분선 추가 ---
+        # --- WEEKLY 섹션 끝, 구분선 추가 (데이터 관리 시작 전) ---
         st.markdown("---")
 
 
     else:
-        # 선택된 캐릭터는 있으나 데이터가 유효하지 않은 경우 메시지
-        st.info("선택된 캐릭터 정보가 유효하지 않습니다.")
-        # 구분선 추가 (Weekly 섹션 대체)
-        st.markdown("---")
-        st.markdown("---")
+        st.info("선택된 캐릭터 정보가 유효하지 않습니다. (데이터 구조 오류)")
+        # 캐릭터가 없는 경우 또는 유효하지 않은 경우 표시될 구분선들
+        st.markdown("---") # DAILY 섹션 대체
+        st.markdown("---") # WEEKLY 섹션 대체
+        st.markdown("---") # WEEKLY 숙제 목록 대체
 
 
 def _render_data_management(data):
     """데이터 관리 섹션 렌더링"""
     st.header("데이터 관리") # 이 헤더는 유지
 
-    # 데이터 관리 팝업 대신 expander 사용 또는 상태 변수로 영역 표시/숨김
-    # st.session_state를 사용하여 영역 표시 여부 제어
     show_data_management = st.session_state.get("show_data_management", False)
 
     if st.button("데이터 관리 열기/닫기", key="toggle_data_management"):
@@ -508,7 +572,7 @@ def _render_data_management(data):
         # JSON 다운로드
         st.download_button(
             label="JSON 파일 다운로드",
-            data=save_data(), # save_data 함수는 호출될 때 최신 상태를 가져옴
+            data=save_data(), # save_data 함수는 호출될 때 최신 상태를 가져오고 타임스탬프 업데이트
             file_name="mabinogi_tasks.json",
             mime="application/json",
             key="download_json"
@@ -517,28 +581,26 @@ def _render_data_management(data):
         # JSON 업로드
         uploaded_file = st.file_uploader("JSON 파일 업로드", type="json", key="upload_json")
         if uploaded_file is not None:
-            load_data(uploaded_file) # 파일 업로드 시 로드 함수 호출 (자동 초기화 포함)
-            # load_data 함수 내부에서 필요한 경우 rerun 호출
+            load_data(uploaded_file) # load_data handles loading and saving to server file after successful upload
+            # load_data 내부에서 필요한 경우 rerun 호출
 
         # 수동 초기화 버튼
         col_reset1, col_reset2 = st.columns(2)
         with col_reset1:
             if st.button("일일 숙제 수동 초기화", key="manual_daily_reset"):
                 perform_daily_reset(data)
-                # last_reset_timestamps 항목이 없으면 생성
-                if "last_reset_timestamps" not in data or data["last_reset_timestamps"] is None:
-                    data["last_reset_timestamps"] = {}
-                data["last_reset_timestamps"]["daily"] = datetime.now(KST).isoformat() # 수동 초기화 시간 업데이트
-                # perform_daily_reset 내에서 success 메시지 표시
+                # Update timestamp and save after reset
+                if not isinstance(data.get("last_reset_timestamps"), dict): data["last_reset_timestamps"] = {}
+                data["last_reset_timestamps"]["daily"] = datetime.now(KST).isoformat()
+                save_data_to_server_file(data) # 데이터 변경 후 저장
                 st.rerun() # 화면 갱신 (필수)
         with col_reset2:
             if st.button("주간 숙제 수동 초기화", key="manual_weekly_reset"):
                 perform_weekly_reset(data)
-                 # last_reset_timestamps 항목이 없으면 생성
-                if "last_reset_timestamps" not in data or data["last_reset_timestamps"] is None:
-                    data["last_reset_timestamps"] = {}
-                data["last_reset_timestamps"]["weekly"] = datetime.now(KST).isoformat() # 수동 초기화 시간 업데이트
-                # perform_weekly_reset 내에서 success 메시지 표시
+                 # Update timestamp and save after reset
+                if not isinstance(data.get("last_reset_timestamps"), dict): data["last_reset_timestamps"] = {}
+                data["last_reset_timestamps"]["weekly"] = datetime.now(KST).isoformat()
+                save_data_to_server_file(data) # 데이터 변경 후 저장
                 st.rerun() # 화면 갱신 (필수)
 
 
@@ -546,26 +608,92 @@ def _render_data_management(data):
 
 st.title("마비노기 모바일 숙제 관리기")
 
+# Add custom CSS for font size and minor style adjustments
+st.markdown("""
+<style>
+/* 전체 글자 크기 및 여백 조정 */
+html, body, [class*="st-emotion"], [class*="stText"] {
+    font-size: 14px !important; /* 기본 폰트 크기 */
+    line-height: 1.5 !important; /* 줄 간격 */
+}
+h1 { font-size: 1.8em !important; margin-bottom: 0.8em !important; }
+h2 { font-size: 1.4em !important; margin-top: 1em !important; margin-bottom: 0.5em !important; }
+h3 { font-size: 1.1em !important; margin-top: 1em !important; margin-bottom: 0.5em !important; }
+
+/* 버튼 크기 및 패딩 조정 */
+div[data-testid="stButton"] button {
+    font-size: 12px !important;
+    padding: 4px 8px !important; /* 상하 좌우 패딩 */
+    margin: 2px 0 !important; /* 버튼 위아래 마진 */
+}
+
+/* 체크박스 라벨 크기 조정 */
+div[data-testid="stCheckbox"] label {
+    font-size: 14px !important;
+    margin-bottom: 5px !important; /* 체크박스 아래 마진 */
+}
+
+/* 입력 필드 및 셀렉트 박스 라벨 크기 조정 */
+div[data-testid="stTextInput"] label,
+div[data-testid="stSelectbox"] label,
+div[data-testid="stFileUploader"] label {
+    font-size: 14px !important;
+    margin-bottom: 0.2em !important;
+}
+
+/* 입력 필드 내부 텍스트 크기 조정 */
+div[data-testid="stTextInput"] input {
+     font-size: 14px !important;
+     padding: 4px 8px !important;
+}
+
+/* selectbox 드롭다운 내부 텍스트 크기 조정 (셀렉터 복잡할 수 있음) */
+/* .stSelectbox > div > div { font-size: 14px !important; } */
+
+
+/* markdown으로 만든 텍스트 (예: 숙제 이름) 마진 조정 */
+div[data-testid="stMarkdownContainer"] {
+     margin-top: 0.5em !important;
+     margin-bottom: 0.3em !important;
+}
+div[data-testid="stMarkdownContainer"] p {
+    margin: 0 !important; /* p 태그 기본 마진 제거 */
+}
+
+/* 구분선 마진 조정 */
+hr {
+    margin-top: 1em !important;
+    margin-bottom: 1em !important;
+}
+
+/* 컬럼 간 간격 조정 (필요시) */
+div[data-testid="stVerticalBlock"] > div[data-testid="stHorizontalBlock"] {
+    gap: 1rem; /* 기본 간격보다 줄이기 */
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
 # 데이터 로드 (앱 실행 시 최초 1회 또는 파일 업로드 시)
-# 이 함수는 필요한 경우 내부적으로 st.rerun()을 호출할 수 있습니다.
+# 이 함수는 필요한 경우 내부적으로 st.rerun()을 호출하고 파일 자동 저장을 시도합니다.
 load_data()
 
 # 메인 데이터 가져오기
+# load_data 함수 내에서 st.session_state.data가 설정되거나 로드됩니다.
 app_data = st.session_state.data
 
 # --- UI 렌더링 함수 호출 ---
 _render_character_management(app_data)
 
-# 구분선 추가 (캐릭터 관리와 숙제 섹션 사이)
+# 구분선 추가 (캐릭터 관리 섹션과 숙제/선택 섹션 사이)
 st.markdown("---")
 
 _render_tasks(app_data)
-# DAILY와 WEEKLY 사이, WEEKLY 하단에 구분선은 _render_tasks 내에 있습니다.
+# _render_tasks 함수 내에서 DAILY와 WEEKLY 섹션 사이, WEEKLY 섹션 끝에 구분선이 추가됩니다.
 
-# 구분선 추가 (숙제 섹션과 데이터 관리 섹션 사이)
-# _render_tasks 마지막에 WEEKLY 구분선이 있으므로, 여기에 추가하면 구분선 2개가 연달아 표시됨.
-# 데이터 관리 헤더 앞에 넣는 것이 더 자연스러움.
+# 데이터 관리 섹션 헤더는 _render_data_management 함수 내에 있으므로 별도 구분선 없이 호출합니다.
+_render_data_management(app_data)
 
-_render_data_management(app_data) # 데이터 관리 헤더는 이 함수 내에 있음
-# 데이터 관리 섹션 뒤에는 별도 구분선 필요 없음
+# 데이터 관리 섹션 하단에는 별도 구분선이 필요 없습니다.
 
